@@ -36,15 +36,3 @@ The response variable is whether the player is a first/second team all-star or n
 
 The explanatory variables are as follows: points (pts) which represent the sum of goals and assists a player has. The more points you have the more exceptional you appear in the eyes of the writers voting. Point share (ps) which is a more advanced analytic that calculates how many points in the standings a player is responsible gain or losing for his team. A team gets 2 points for a win, 0 for a loss, and 1 for an overtime/shootout loss. If team ends the season with 100 points and a player has a point share of 8, the player is estimated to have accounted for 8 of the team's 100 points. Another explanatory variable is age. I believe that being either very young or very old will affect a player's overall season performance. The final variable I'm considering is player position. A defenseman doesn't have to be near the top of the league in points to get an all-star team selection. He usually just has to be near the top of the league in points AMONG DEFENSEMEN. Also only 2 of each position may be selected and I'm not sure exactly how to implement that into the model.
 
-## Nick's comments
-
-Your dataset is somewhat small, since the observational unit is team, no?
-My concern is that your modeling will be constrained by this limitation and may be insufficient for what is needed for a STAT230 project.
-Are there ways to explore individual level data?
-Is there an equivalent of an "all-star team"? That might allow you to operate at the individual level.
-
-Note that for each unit of observation, there will be clustering, since you are looking at repeated measures on the same unit (team or individual).
-You can address this using something called "generalized estimating equations".
-Can you please create a new issue on GitHub asking for more information on GEE's and I'd be glad to assist.
-
-Once you address my query about individual vs. team characteristics I look forward to talking further (perhaps during my office hours on Thursday?).
