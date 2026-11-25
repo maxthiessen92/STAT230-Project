@@ -1,0 +1,91 @@
+---
+title: "STAT230 Project data wrangling"
+author: "Max Thiessen"
+date: "2023-05-15"
+date-format: iso
+format: pdf
+---
+
+```{r}
+#| label: setup
+#| include: false
+library(mosaic)
+library(tidyverse)
+options(digits = 4)
+knitr::opts_chunk$set(
+  fig.height=2,
+  tidy=FALSE,     # display code as typed
+  size="small")   # slightly smaller font for code
+```
+
+This file carries out the data wrangling for my project.
+
+It reads in files stored in `raw_data` and outputs files into `data` that are read by the `report.qmd` file.
+
+Note that the files have a date stamp.
+These should be updated when you make changes.
+
+See the following example (which should be updated with more appropriate names and current dates).
+
+```{r}
+#| message: false
+players2021 <- readr::read_csv("raw_data/players2022.csv") |>
+  janitor::clean_names() |>
+  mutate(games_per = gp/82) |>
+  filter(gp > 21)
+# other data wrangling goes here
+players2020 <- readr::read_csv("raw_data/players2021.csv") |>
+  janitor::clean_names() |>
+  mutate(games_per = gp/56) |>
+  filter(gp > 14)
+players2019 <- readr::read_csv("raw_data/players2020.csv") |>
+  janitor::clean_names() |>
+  mutate(games_per = gp/71) |>
+  filter(gp > 18)
+players2018 <- readr::read_csv("raw_data/players2019.csv") |>
+  janitor::clean_names() |>
+  mutate(games_per = gp/82) |>
+  filter(gp > 21)
+
+allstars <- readr::read_csv("raw_data/allstars.csv") |>
+  janitor::clean_names()
+
+players <- players2021 |> 
+  full_join(players2020) |> 
+  full_join(players2019) |>
+  full_join(players2018) |>
+  distinct(player, pos, season, .keep_all = TRUE) |>
+  mutate(ppg = pts/gp,
+         pspg = ps/gp,
+         ppg10 = ppg*10,
+         games_per10 = games_per*10) |>
+  left_join(allstars) |>
+  mutate(all_star_team = as.factor(ifelse(is.na(all_star_team), "No", "Yes")),
+         s_per = ifelse(is.na(s_per), 0, s_per),
+         pos_group = case_when(str_detect(pos,"C")==TRUE~"F",
+                               str_detect(pos,"LW")==TRUE~"F",
+                               str_detect(pos,"RW")==TRUE~"F",
+                               str_detect(pos,"F")==TRUE~"F",
+                               str_detect(pos,"W")==TRUE~"F",
+                               TRUE~"D"))
+
+players2022 <- readr::read_csv("raw_data/players2023.csv") |>
+  janitor::clean_names() |>
+  distinct(player, pos, season, .keep_all = TRUE) |>
+  mutate(ppg = pts/gp,
+         pspg = ps/gp,
+         ppg10 = ppg*10,
+         games_per = gp/82,
+         games_per10 = games_per*10,
+         pos_group = case_when(str_detect(pos,"C")==TRUE~"F",
+                               str_detect(pos,"LW")==TRUE~"F",
+                               str_detect(pos,"RW")==TRUE~"F",
+                               str_detect(pos,"F")==TRUE~"F",
+                               str_detect(pos,"W")==TRUE~"F",
+                               TRUE~"D")) |>
+        filter(gp > 21)
+
+save(players, players2022, file = "data/project-2023-05-02.RData")
+rm(allstars, players, players2018, players2019, players2020, players2021, players2022)
+```
+

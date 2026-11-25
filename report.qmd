@@ -1,0 +1,538 @@
+---
+title: "Predicting the 2022-23 First and Second Team NHL All-Stars with Individual Player Data"
+author: "Max Thiessen"
+date: "2023-05-15"
+date-format: iso
+format: pdf
+toc: true
+extra_dependencies: ["float"]
+editor: 
+  markdown: 
+    wrap: 72
+bibliography: bibliography.bib
+---
+
+```{r}
+#| label: setup
+#| include: false
+library(mosaic)
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+library (dplyr)
+library(tidyr)
+library(yardstick)
+library(tidymodels)
+library(mdsr)
+library(ModelMetrics)
+options(digits = 4)
+knitr::opts_chunk$set(fig.pos = "H", out.extra = "")
+```
+
+```{r}
+#| echo: false
+load("data/project-2023-05-02.RData") # need to keep updated as wrangled data are updated
+```
+
+## Abstract
+
+**Background:** NHL First and Second Team All-Stars are awarded by the
+PHWA after every season. This project wants to explore the possibility
+of predicting these picks using individual player data.
+
+**Data:** The dataset includes 2747 instances of NHL players who played
+in seasons between 2018 and 2022 and played at least a quarter of the
+season. The data was gathered from hockey-reference.com. Using the base
+dataset, variables were created to account for differing season lengths
+due to Covid. These variables were the position group (forward or
+defenseman), percentage of total games played, and point per game rate.
+Interactions between the season and points per game rate and the points
+per game rate and position group were explored, but they didn't improve
+the predictive power of the model.
+
+**Results:** The model showed a positive relationship between a games
+percentage increment up 0.1 and being an All-Star (OR = 3.57), a
+positive relationship between a points per game rate increment up 0.1 and
+being an All-Star (OR = 4.89), and a negative relationship between being
+a forward and being an All-Star (OR = 0.001). The model had an accuracy
+around 99% for both the training and testing sets, and its sensitivity
+increased from 0.53 in the training set to 0.9 in the testing set. The
+model predicted the 2022-23 Second Team to be Leon Draisaitl, Jason
+Robertson, Nikita Kucherov, Quinn Hughes, and Dougie Hamilton. It
+predicted the 2022-23 First Team to be Connor McDavid, Matthew Tkachuk,
+David Pastrnak, Erik Karlsson, and Josh Morrissey.
+
+**Conclusions:** First and Second Team NHL All Stars can be predicted
+with moderately decent accuracy based on a individual player
+statistics; however there are certain non-statistical factors that might
+effect writer voting that can't be accounted for.
+
+## Introduction
+
+After every NHL season, representatives from the Professional Hockey
+Writers Association gather to vote on the most outstanding players at
+each position. Each writer gets 3 votes per position: one for first
+another for second, and one for third. A third place vote is worth 1
+point, a second place vote is worth 3, and a first place vote is worth
+5. The points are counted up and if a player is a forward and gets the
+most points out of all players at their forward position, or a player is
+a defenseman and gets top 2 in points among defensemen, they become a
+First Team NHL All-Star. The players with the second highest votes at
+each forward position and the third and fourth most points as defensemen
+are named Second Team NHL All-Stars. Although the names are similar,
+these selections shouldn't be mistaken for players who make an All-Star
+Game appearance. This honor is the equivalent of the All-NBA teams for
+the NBA and the All-MLB teams for the MLB.
+
+The question this project seeks to answer is whether players with the
+honor of being a First or Second Team All-Star can be identified using a
+that player's individual statistics. I also want to use said predictive
+method to predict the players who will earn First and Second Team
+All-Star honors for the current 2022-23 season.
+
+## Data
+
+This players dataset features the individual season statistics of NHL
+players who played at least a quarter of the games in the 2018-19,
+2019-20, 2020-21, and 2021-22 seasons. The data was pulled from
+[hockey-reference.com](https://www.hockey-reference.com/leagues/NHL_2022_skaters.html).
+The statistics of the original dataset include the age of the player,
+the team he played for, the number of games he played, his goals,
+assists, and points, his point share value, the number of shots he took,
+his shooting percentage, the amount of time he spent on the ice during
+the season in minutes, and the season they played in. Due to the 2019-20
+and 2020-21 seasons being shortened by the pandemic, I had to create a
+few variables to standardize the seasons regardless of their length.
+
+@tbl-code displays a codebook with all the variables considered for the
+logistic regression model. All the variables aside from `age`, `season`,
+and `pos_group` are examples of variables I created to standardize the
+seasons. `pos_group` was created to group together all the forward
+positions and defense positions because there isn't statistical
+difference among the different forward positions and defense positions,
+just between forwards and defensemen.
+
+```{r}
+#| label: tbl-code
+#| tbl-cap: "Codebook for the First and Second All-NHL Predictive Logistic Regression project"
+#| echo: false
+codebook <- tribble(
+ ~`VARIABLE NAME`, ~DESCRIPTION,
+ "age", "age of the player",
+ "pos_group", "is the player a forward or a defenseman",
+ "games_per", "percentage of the total games in a season the player played",
+ "ppg", "points per game rate",
+ "season", "the year the player played in (2018, 2019, 2020, 2021)"
+)
+knitr::kable(codebook)
+```
+
+### EDA
+
+```{r}
+#| label: fig-pairs
+#| echo: false
+#| message: false
+#| fig-cap: "Pairs plot of players dataset"
+#| fig.height: 6
+#| fig-width: 7.5
+
+GGally::ggpairs(
+  select(
+    players, age, pos_group, games_per, ppg, season, all_star_team
+  ),
+  columns = c("age", "pos_group", "games_per", "ppg", "season"),
+  mapping = aes(color = all_star_team)
+)
+```
+
+```{r}
+#| label: quant-tbl
+#| echo: false
+#| message: false
+#| tbl-cap: "Summary Statistics of Quantatative Variables"
+var_table <- data.frame(predictor = c("age", "games percentage", "points per game"))
+  vars <- favstats(~ age, data = players) |>
+  full_join(favstats(~ games_per, data = players)) |>
+  full_join(favstats(~ ppg, data = players))
+  
+var_table <- var_table |>
+  bind_cols(vars) |>
+  select(-missing)
+
+knitr::kable(var_table, digits = 2) 
+```
+
+```{r}
+
+knitr::kable(tally(~ pos_group, data = players))
+knitr::kable(tally(~ season, data = players))
+knitr::kable(tally(~ all_star_team, data = players))
+
+```
+
+The dataset contains the seasonal individual player data for 2747 total
+forwards and defense that played in NHL seasons between 2018 and 2022
+who played at least a quarter of the season. 1802 of the 2747 player
+seasons were from forwards and 945 were from defensemen. Of those 2747
+player seasons, only 40 of those instances earned the player the title
+of First or Second Team All-Star. The oldest player to play in the NHL
+over this time frame was 44 years old and the youngest player was 18.
+Points per game rates ranged from 0 to 1.88. The percentage of games
+played ranged from 26.8% to 102.4%. Players who played more than 100% of
+total games in a season were players who played all of one teams games
+while rostered, got traded to another team that had played less games,
+and played the rest of the new team's
+
+The pairs plot (see @fig-pairs) displays the relationship between the
+main variables being considered for the logistic regression model
+grouped by the response variable `all_star_team`. Red represents
+non-all-stars and blue represents the all-stars. Age, points per game,
+and point share per game all have a slight right-skew. Games percentage
+has a heavy left-skew indicating that a large amount of the players
+played near-full seasons. Characteristics of a All-Star player that I
+can see from the plots are that they play most of the season and they
+have a high points per game rate. Age doesn't appear to be a significant
+factor from the univariate distribution in the pairs plot.
+
+Two interactions that were tested for the multiple logistic regression
+model are the between `pos_group` and `ppg` and `ppg` and `season`. When
+looking pair plot of `pos_group` and `ppg` in @fig-pairs, there's a
+discrepancy between the distribution of `ppg` for forwards and
+defensemen. This is because defensemen aren't expected to contribute to
+a team's offensive output as much of forwards. I though that the model
+should take that into account with an interaction. I also wanted to look
+into the second interaction, `ppg` and `season`, because scoring has
+been on the incline in the NHL over the past few seasons. More players
+are getting higher point totals year after year.
+
+```{r}
+#| echo: false
+null_mod <- glm(all_star_team ~ games_per + pos_group + ppg + season,
+family = "binomial", data = players)
+
+interaction_mod <- glm(all_star_team ~ games_per + pos_group + ppg + season + pos_group * ppg + ppg * season,
+family = "binomial", data = players)
+
+anova(null_mod, interaction_mod, test = "Chisq")
+```
+
+According to the chi-squared test above, with a p-value of 0.79, it
+appears that the interactions between `pos_group` and `ppg` and `ppg`
+and `season` are not significant in predicting whether a player is an
+All-Star.
+
+## Results
+
+### Final Model
+
+```{r}
+#| label: tbl-reg
+#| tbl-cap: "Multiple Regression Model for the Player Data"
+#| echo: false
+train <- players |> filter(season != 2021)
+test <- players |> filter(season == 2021)
+
+mod_final <- logistic_reg(mode = "classification") |>
+  set_engine("glm") |>
+  fit(all_star_team ~ games_per10 + pos_group + ppg10  + season, data = train)
+
+cleaned_up <- broom::tidy(mod_final) |>
+  rename(`p-value` = p.value) |>
+  mutate(
+    term = str_replace(term, "pos_group", "Position: "),
+    `est (SE)` = paste0(round(estimate, 2), " (", round(std.error, 2), ")"),
+    `OR` = round(exp(estimate), 2)
+  ) |>
+  select(term, `est (SE)`, `OR`, `p-value`)
+knitr::kable(cleaned_up, digits = 2)
+
+```
+
+@tbl-reg shows the predictors of the final model. The `games_per`
+variable and `ppg` variable were recoded so that interpretations of a
+0.1 increase in their values could be made. The percentage of games
+played, the points per game rate, and whether the player is a forward or
+defenseman have great significance in predicting whether a players is a
+First or Second Team NHL All-Star. For every additional 0.1 increase to
+`games_per`, a player's odds of being an All-Star increases 3.6 times.
+For every additional 0.1 increase to `ppg`, the odds a player is an
+All-Star becomes 4.9 times greater. The odds of being an All-Star are
+significantly less if the player is a forward rather than a defenseman.
+The season a player played in has no statistical significance.
+
+The significance of the the position group of the player may be
+attributed to the proportions of players in each group in the entire
+dataset versus those who are All-Stars. Defensemen make up 34% of the
+dataset, but they make up 40% of non-goalie All-Stars.
+
+Games percentage is incredibly significant in determining who WON'T be
+an All-Star. When looking at the univariate distribution of `games_per`
+in @fig-pairs, there isn't a single player who played less than 75% of
+their games and was an All-Star. Most All-Stars have a `games_per` value
+that falls between 0.9 and 1.
+
+Points per game is also a strong predictor which can be observed when
+looking at the `ppg` univariate distribution in @fig-pairs as well. The
+clear divide in the distributions of All-Stars and non-All-Stars is
+apparent.
+
+All these strong predictors combine to create an accurate model.
+
+```{r}
+#| echo: false
+players <- players |>
+  bind_cols(
+    predict(mod_final, new_data = players, type = "class"),
+    ) |>
+  rename(team_prediction = .pred_class)
+```
+
+
+
+```{r}
+#| label: fig-allstars
+#| echo: false
+#| message: false
+#| fig-cap: "Plot of players who were All-Stars stratified by season based on games percentage and points per game"
+ggplot(data = players, aes(x = games_per10, y = ppg10)) +
+  geom_count(
+    data = players,
+    aes(color = all_star_team), alpha = 0.7
+  ) +
+  scale_color_manual(values = c("red", "blue")) +
+  
+  facet_wrap(~fct_rev(as.factor(season)))
+```
+```{r}
+#| label: fig-prediction
+#| echo: false
+#| message: false
+#| fig-cap: "Plot of players who were predicted to be All-Stars stratified by season based on games percentage and points per game"
+
+ggplot(data = players, aes(x = games_per10, y = ppg10)) +
+  geom_count(
+    data = players,
+    aes(color = team_prediction), alpha = 0.7
+  ) +
+  scale_color_manual(values = c("red", "blue")) +
+  
+  facet_wrap(~fct_rev(as.factor(season)))
+```
+
+@fig-allstars plots All-Stars versus non-All-Stars in the entirety of 
+the players dataset based on `ppg` and `games_per`. @fig-prediction 
+does the same but plots the final model's predictions instead.
+When comparing @fig-allstars and @fig-prediction, the predictions versus 
+the actual all-stars are show some consistency. All-Stars tend to have
+a high `ppg` and `games_per` which is reflected in both plots. For both 
+plots the distributions appear to be the similar regardless of the season.
+
+### Assessing the Model
+
+```{r}
+#| echo: false
+train <- train |>
+  bind_cols(
+    predict(mod_final, new_data = train, type = "class"),
+    )
+
+test <- test |>
+  bind_cols(
+    predict(mod_final, new_data = test, type = "class"),
+    )
+
+mod_yes <- logistic_reg(mode = "classification") |>
+  set_engine("glm") |>
+  fit(all_star_team ~ 0, data = train)
+
+mod_no <- logistic_reg(mode = "classification") |>
+  set_engine("glm") |>
+  fit(all_star_team ~ 1, data = train)
+```
+
+```{r}
+#| label: tbl-accuracy
+#| echo: false
+#| tbl-cap: "Model accuracy, sensitivity, and specificity measures for the All-Star Team model"
+assess_tbl <- tibble(
+model = c("Always", "Never", "Final"),
+mod =  list(mod_yes, mod_no, mod_final)
+)
+
+assess_tbl <- assess_tbl |>
+  mutate(
+    y_train = list(pull(train, all_star_team)),
+    y_test = list(pull(test, all_star_team)),
+    y_hat_train = map(
+      mod,
+      ~pull(predict(.x, new_data = train, type = "class"), .pred_class)
+    ),
+    y_hat_test = map(
+      mod,
+      ~pull(predict(.x, new_data = test, type = "class"), .pred_class)
+    )
+  )
+
+assess_tbl <- assess_tbl |>
+  mutate(
+    acc_train = map2_dbl(y_train, y_hat_train, accuracy_vec),
+    acc_test = map2_dbl(y_test, y_hat_test, accuracy_vec),
+    sens_train = map2_dbl(y_train, y_hat_train, sens_vec, event_level = "second"),
+    sens_test = map2_dbl(y_test, y_hat_test, sens_vec, event_level = "second"),
+    spec_train = map2_dbl(y_train, y_hat_train, spec_vec, event_level = "second"),
+    spec_test = map2_dbl(y_test, y_hat_test, spec_vec, event_level = "second")
+    ) |>
+  select(-mod, -matches("^y")) |>
+  arrange(desc(acc_test))
+
+knitr::kable(assess_tbl, digits = 4)
+```
+
+@tbl-accuracy displays the final model's performance with the training
+and testing sets when compared to models that either only categorize
+players as non-All-Stars or only categorize players as All-Stars. The
+training set contained instances of players playing in seasons other
+than the 2021-22 season and the testing set contained only the players
+of that 2021-22 season. This divide created a 75-25 split.
+
+The final model had higher accuracy in both the training and testing
+sets than both the other models. It identified 53% of the All-Stars in
+the training set and it did an even better job of identifying All-Stars
+in the testing set, getting 90% of them correct. The specificity
+decreased from the training set to the testing set (0.998 to 0.989),
+however for the purpose of this project, getting slightly more false
+positives is not detrimental.
+
+### Predicting the 2022-23 All-Stars
+
+```{r}
+#| label: tbl-players
+#| echo: false
+#| tbl-cap: "15 Players with the Highest Probabilities of being All-Stars"
+players2022_head <- players2022 |>
+  bind_cols(
+    predict(mod_final, new_data = players2022, type = "prob"),
+    ) |>
+  rename(team_probability = .pred_Yes) |>
+  select(player, pos, gp, g, a, pts, team_probability) |>
+  arrange(desc(team_probability)) |>
+  head(15)
+
+knitr::kable(players2022_head, digits = 4)
+```
+
+@tbl-players displays the 15 players who played in the 2022-23 season
+with the highest probabilities of being either a First or Second Team
+All-Star sorted from highest probability to lowest. A general trend
+between the probability and points can be seen when comparing forwards
+to forwards and defensemen to defensemen.
+
+#### 2022-23 Second Team All-Stars
+
+**C - Leon Draisaitl, Edmonton Oilers, #29, Probability: 99.7%**
+
+**80 GP - 52 G - 76 A - 128 Pts**
+
+Draisaitl finished the season 4th in goals and 2nd in total points.
+
+**LW - Jason Robertson, Dallas Stars, #21, Probability: 84.9%**
+
+**82 GP - 46 G - 63 A - 109 Pts**
+
+Roberston was tied for 6th in points this season.
+
+**RW - Nikita Kucherov, Tampa Bay Lightning, #86, Probability: 92.4%**
+
+**82 GP - 30 G - 83 A - 113 Pts**
+
+Kucherov was 3rd in points and 2nd in assists among all players
+this season.
+
+**D - Quinn Hughes, Vancouver Canucks, #43, Probability: 89.7%**
+
+**78 GP - 7 G - 69 A - 76 Pts**
+
+Hughes was tied for second in points among defensemen. He also finished
+second in assists among defensemen.
+
+**D - Dougie Hamilton, New Jersey Devils, #7, Probability: 83.9%**
+
+**78 GP - 22 G - 52 A - 74 Pts**
+
+Hamilton finished 2nd in league for goals scored by defensemen.
+
+#### 2022-23 First Team All-Stars
+
+**C - Connor McDavid, Edmonton Oilers, #97, Probability: 100%**
+
+**82 GP - 64 G - 89 A - 153 Pts**
+
+McDavid led the league in goals with 64 and was the first player since
+Mario Lemieux in 1996 to eclipse 150 points in a season.
+
+**LW - Matthew Tkachuk, Florida Panthers, #19, Probability: 88.7%**
+
+**79 GP - 40 G - 69 A - 109 Pts**
+
+Tkachuk finished the season tied for 6th in points. His exceptional
+performance in the regular season dragged his Florida team to a Wild
+Card placement in the playoffs.
+
+**RW - David Pastrnak, Boston Bruins, #88, Probability: 92.4%**
+
+**82 GP - 61 G - 52 A - 113 Pts**
+
+Pastrnak became one of only 5 players to score over 60 goals in a season
+in the 21st century.
+
+**D - Erik Karlsson, San Jose Sharks, #65, Probability: 99.9%**
+
+**82 GP - 25 G - 76 A - 101 Pts**
+
+Karlsson is the first defenseman since Brian Leech in 1992 to score over
+100 points in a season.
+
+**D - Josh Morrissey, Winnipeg Jets, #44, Probability: 89.7%**
+
+**78 GP - 16 G - 60 A - 76 Pts**
+
+Morrissey tied for 2nd in points among all defensemen.
+
+## Conclusion
+
+The goal of this project was to create a model that can accurately
+predict the future First and Second Team NHL All-Stars. Through the
+created model, I found that there was a positive association between a
+high games played percentage and a high points per game rate and being
+an All-Star, and a negative association between being a forward and
+being an All-Star. The develop logistic regression model made successful
+predictions in both the training and testing sets, having an accuracy of
+around 99% for both, and a higher true positive rate (sensitivity) for
+the testing set than the training set. I'm also pleased with the model's
+picks for the 2022-23 NHL All-Star Teams.
+
+There are some limitations for the model. It can't account for
+non-statistical factors that influence the writers decisions when
+casting their votes. For example, despite them being the top 2 players
+in points this season, some writers might not vote for both Connor
+McDavid and Leon Draisaitl because they play for the same team at the
+same position. This happened in the 2020-21 season, when Draisaitl was
+the First Team Center thanks to an incredible goal-scoring pace in the
+season, but McDavid, despite having the most points that season (and the
+highest point per game rate out of any instance in the dataset), didn't
+even get a nod for the Second Team Center position. Creating a
+categorical variable that would deal with this situation (whether a
+teammate at a players position was an All-Star or not) wouldn't be
+possible for predicting future events, because it's dependent on the
+response variable.
+
+Possible improvements for the model could include adding a goals per
+game rate. The issue with that variable is that there is definitely
+multicollineary with point share, which most likely means there's
+correlation with points per game rate. I also looked at the top scorers
+of the 2022-23 season and my feeling is that while I think that the top
+few goal scorers might have a chance, players that score goals and don't
+get as many assists don't look amazing candidates. The goal scorer has
+to be scoring at a rate the sets them apart from the rest.
+
